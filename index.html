@@ -35,6 +35,9 @@
   .setbtn{width:38px;height:34px;border-radius:9px;border:1px solid var(--line);background:#0c111b;color:var(--dim);font-size:13px;font-weight:600}
   .setbtn.on{background:var(--green);color:#06120c;border-color:var(--green)}
   .restbtn{margin-left:auto;border:1px solid var(--line);background:#0c111b;color:var(--amber);border-radius:9px;padding:7px 10px;font-size:12.5px;font-weight:600}
+  .holdbtn{border:1px solid var(--red);background:rgba(255,93,108,.14);color:#ffb3ba;border-radius:9px;padding:7px 11px;font-size:12.5px;font-weight:700}
+  .holdbtn.live{background:var(--red);color:#fff;border-color:var(--red);animation:pulse 1s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.62}}
   .runbtn{border:1px solid var(--blue);background:rgba(79,140,255,.12);color:#bcd4ff;border-radius:9px;padding:6px 8px;font-size:12px;font-weight:600;line-height:1.35;width:100%}
   .runDetail{display:none;margin-top:11px;border:1px solid var(--blue);background:rgba(79,140,255,.08);border-radius:11px;padding:12px;font-size:13px}
   .runDetail.show{display:block}
@@ -169,6 +172,7 @@ function exs(list, tag){
       (e.tip?('<div class="tip">⚠ '+e.tip+'</div>'):'')+
       '<div class="sets">'+sets+
         '<button class="restbtn" data-rtimer="'+e.rest+'" data-rname="'+e.n+'">⏱ 计时</button>'+
+        (e.n.indexOf('平板')>=0 ? '<button class="holdbtn" data-hold="'+i+'">⏱ 撑住计时</button>' : '')+
       '</div></div>';
   }).join('');
 }
@@ -195,16 +199,24 @@ document.addEventListener('click', e=>{
   }
   const rt=t.closest('[data-rtimer]');
   if(rt){ startTimer(+rt.dataset.rtimer, rt.dataset.rname); return; }
+  const hb=t.closest('[data-hold]');
+  if(hb){ startHold(); return; }
   const rb=t.closest('.runbtn');
   if(rb){ showRun(rb.dataset.run); return; }
 });
 $('resetA').onclick=()=>{ Object.keys(S.done).forEach(k=>{if(k.startsWith('A-'))delete S.done[k];}); save(); render(); };
 $('resetB').onclick=()=>{ Object.keys(S.done).forEach(k=>{if(k.startsWith('B-'))delete S.done[k];}); save(); render(); };
 
-/* ===== 休息计时器 ===== */
-let timer=null, remain=0;
+/* ===== 计时器：休息倒计时 / 平板撑正计时 ===== */
+let timer=null, remain=0, lastRestName='', mode='rest';
+let holdTimer=null, holdSec=0, holdLive=false, hideT=null;
+
 function startTimer(sec, name){
-  remain=sec;
+  mode='rest';
+  clearInterval(holdTimer); holdTimer=null; holdLive=false; clearTimeout(hideT);
+  document.querySelectorAll('.holdbtn').forEach(b=>b.classList.remove('live'));
+  $('tbTime').style.color='';
+  remain=sec; lastRestName=name||'';
   $('timerbar').classList.add('show');
   $('tbLbl').textContent='休息中 · '+name;
   paint();
@@ -212,13 +224,50 @@ function startTimer(sec, name){
   timer=setInterval(()=>{ remain--; paint(); if(remain<=0){ clearInterval(timer); done(); } },1000);
 }
 function paint(){ $('tbTime').textContent=fmt(Math.max(0,remain)); }
+
+/* 平板支撑正计时 */
+function startHold(){
+  mode='hold';
+  clearInterval(timer); clearInterval(holdTimer); clearTimeout(hideT);
+  holdSec=0; holdLive=true;
+  $('timerbar').classList.add('show');
+  $('tbLbl').textContent='🔥 平板支撑 · 撑住！';
+  $('tbTime').textContent='00:00';
+  $('tbTime').style.color='var(--green)';
+  document.querySelectorAll('.holdbtn').forEach(b=>b.classList.add('live'));
+  beepOnce();
+  try{ if(navigator.vibrate) navigator.vibrate(90); }catch(e){}
+  holdTimer=setInterval(()=>{ holdSec++; $('tbTime').textContent=fmt(holdSec); },1000);
+}
+function stopHold(){
+  clearInterval(holdTimer); holdTimer=null; holdLive=false;
+  $('tbLbl').textContent='✅ 这组撑了 '+fmt(holdSec)+'（记下来）';
+  $('tbTime').style.color='var(--amber)';
+  document.querySelectorAll('.holdbtn').forEach(b=>b.classList.remove('live'));
+  beep();
+  clearTimeout(hideT);
+  hideT=setTimeout(()=>{ $('timerbar').classList.remove('show'); },5000);
+}
+
 function done(){
   $('tbLbl').textContent='✅ 休息结束 · 下一组';
   beep();
   if(navigator.vibrate) try{navigator.vibrate([200,100,200]);}catch(e){}
+  /* 平板支撑/侧平板：休息一结束，自动开始撑住计时 */
+  if(lastRestName.indexOf('平板')>=0){ setTimeout(startHold, 800); }
 }
-$('tbStop').onclick=()=>{ clearInterval(timer); $('timerbar').classList.remove('show'); };
-$('tbReset').onclick=()=>{ if(remain>0||$('timerbar').classList.contains('show')){ startTimer(remain>0?remain:60,$('tbLbl').textContent.replace('休息中 · ','')); } };
+$('tbStop').onclick=()=>{
+  if(mode==='hold'){
+    if(holdLive) stopHold();
+    else { clearTimeout(hideT); $('timerbar').classList.remove('show'); }
+    return;
+  }
+  clearInterval(timer); $('timerbar').classList.remove('show');
+};
+$('tbReset').onclick=()=>{
+  if(mode==='hold'){ startHold(); return; }
+  if(remain>0||$('timerbar').classList.contains('show')){ startTimer(remain>0?remain:60, lastRestName||'休息'); }
+};
 let actx=null;
 function beep(){
   try{
@@ -231,6 +280,17 @@ function beep(){
       g.gain.exponentialRampToValueAtTime(0.0001,t+d+0.18);
       o.connect(g);g.connect(c.destination);o.start(t+d);o.stop(t+d+0.2);
     });
+  }catch(e){}
+}
+function beepOnce(){
+  try{
+    if(!actx) actx=new (window.AudioContext||window.webkitAudioContext)();
+    const c=actx,t=c.currentTime;
+    const o=c.createOscillator(),g=c.createGain();
+    o.type='sine';o.frequency.value=1240;
+    g.gain.setValueAtTime(0.0001,t);g.gain.linearRampToValueAtTime(0.34,t+0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.13);
+    o.connect(g);g.connect(c.destination);o.start(t);o.stop(t+0.15);
   }catch(e){}
 }
 render();
